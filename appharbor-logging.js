@@ -299,7 +299,7 @@ Array.prototype.flat = function() {
 
 	return depth ? Array.prototype.reduce.call(this, function (acc, cur) {
 		if (Array.isArray(cur)) {
-			acc.push.apply(acc, flat.call(cur, depth - 1));
+			acc.push.apply(acc, Array.prototype.flat.call(cur, depth - 1));
 		} else {
 			acc.push(cur);
 		}
