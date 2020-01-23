@@ -161,7 +161,7 @@ function handler(req, res) {
 
   const promises = [];
 
-  const prettifiedLogContents = req.body.flatMap(str => {
+  const prettifiedLog = req.body.flatMap(str => {
     const comp = str.split(' ');
 
     const headerPri = comp.shift();
@@ -206,24 +206,31 @@ function handler(req, res) {
         }
 
         const retClone = Object.assign({ part }, ret);
-        return `${line} ${JSON.stringify(retClone)}`;
+        return [retClone, `${line} ${JSON.stringify(retClone)}`];
       });
     }
 
     // else just return a single message and json data
-    return [`${message} ${JSON.stringify(ret)}`];
-  }).join('\n');
+    return [[ret, `${message} ${JSON.stringify(ret)}`]];
+  });
 
-  promises[promises.length] = promisePost(ctx.secrets.sematext_url)
+  promises[promises.length] = promisePost('https://logsene-receiver.sematext.com/_bulk')
     .headers({'Content-Type': 'application/json'})
-    .send(JSON.stringify({ "message": prettifiedLogContents }))
+    .send(
+      prettifiedLog.map(([data, message]) => 
+        JSON.stringify({ index: { _index: ctx.secrets.logsene_token, _type: data.facility } }) + '\n' +
+        JSON.stringify({ '@timestamp': data.timestamp, message, severity_numeric: data.severityCode })
+      ).join('\n')
+    )
     .end()
     .then(e => e.raw_body);
 
   // push to loggly
   promises[promises.length] = promisePost(ctx.secrets.logurl)
     .headers({/*'Accept': 'application/json', */'Content-Type': 'application/json'})
-    .send(prettifiedLogContents)
+    .send(
+      prettifiedLog.map(([data, message]) => message).join('\n')
+    )
     .end()
     .then(e => e.raw_body);
 
