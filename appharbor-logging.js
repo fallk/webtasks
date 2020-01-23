@@ -2,61 +2,8 @@ const unirest = require('unirest');
 const express = require('express');
 const Webtask = require('webtask-tools');
 const util = require('util');
-const Gists = require('gists');
+const console = require('chalk-console');
 const app = express();
-let gists;
-
-//
-function makeOrUpdateGist(appendContent) {
-  appendContent = appendContent || `<received message with no content at ${new Date()}>`;
-  
-  function pad(n, width, z) {
-    z = z || '0';
-    n = n + '';
-    return n.length >= width ? n : new Array(width - n.length + 1).join(z) + n;
-  }
-
-  function formatDate(date) {
-    var day = pad(date.getUTCDate(), 2);
-    var month = pad(date.getUTCMonth() + 1, 2);
-    var year = pad(date.getUTCFullYear(), 4);
-
-    return `${year}-${month}-${day}`;
-  }
-
-  const today = new Date();
-  const todayLogFilename = `${formatDate(today)}.log`;
-  const todayLogDesc = `RayBot Log for ${formatDate(today)}`; // used for identity
-
-  return (async () => {
-    const gistList = (await gists.all()).pages.flatMap(e => e.body);
-
-    //console.log(gistList);
-
-    let existingGist = gistList.find(gist => gist.description === todayLogDesc);
-    if (!existingGist) {
-      await gists.create({
-        description: todayLogDesc,
-        public: false,
-        files: {
-          [todayLogFilename]: {
-            content: appendContent
-          },
-        }
-      });
-    } else {
-      existingGist = (await gists.get(existingGist.id)).body;
-      await gists.edit(existingGist.id, {
-        files: {
-          [todayLogFilename]: {
-            content: existingGist.files[todayLogFilename].content + '\n' + appendContent
-          },
-        }
-      });
-    }
-  })();
-}
-//
 
 // Express allows arrays-of-middleware to act as a "single" middleware.
 const logplexMiddleware = [
@@ -65,7 +12,7 @@ const logplexMiddleware = [
   require('body-parser').raw({ type: 'application/logplex-1' }),
   // Next, split `req.body` into separate lines and parse each one using
   // the `glossy` syslog parser.
-  function(req, res, next) {
+  (req, res, next) => {
     const buf = req.body || Buffer.alloc(0);
     let index = 0;
 
@@ -148,37 +95,7 @@ const SEVERITY = [
 
 // flatMap polyfill
 // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/flatMap
-if (!Array.prototype.flatMap) {
-  /* eslint no-extend-native: 0 */
-  Object.defineProperty(Array.prototype, 'flatMap', {
-    value: function(callback, thisArg) {
-      var self = thisArg || this;
-      if (self === null) {
-        throw new TypeError('Array.prototype.flatMap called on null or undefined');
-      }
-      if (typeof callback !== 'function') {
-        throw new TypeError(callback + ' is not a function');
-      }
-
-      var list = [];
-
-      // 1. Let O be ? ToObject(this value).
-      var o = Object(self);
-
-      // 2. Let len be ? ToLength(? Get(O, "length")).
-      var len = o.length >>> 0;
-
-      for (var k = 0; k < len; ++k) {
-        if (k in o) {
-          var part_list = callback.call(self, o[k], k, o);
-          list = list.concat(part_list);
-        }
-      }
-
-      return list;
-    }
-  });
-}
+// <removed>
 
 /* global Promise */
 
@@ -199,11 +116,6 @@ function promisePost(url) {
     });
   }
   return obj;
-}
-
-// call get on the parent class of Gists
-function gistsGetRequest(...args) {
-  return Object.getPrototypeOf(Object.getPrototypeOf(gists)).get.apply(gists, args);
 }
 
 function get(ctx) {
@@ -246,94 +158,91 @@ const keepProcessInMessage = true;
 
 function handler(req, res) {
   const ctx = Webtask.__ctx || req.webtaskContext;
-  
-  if (!gists) {
-    gists = new Gists({
-      token: ctx.secrets.gh_token
-    });
-  }
 
   const promises = [];
 
-  promises[promises.length] = promisePost(ctx.secrets.logurl)
-    .headers({/*'Accept': 'application/json', */'Content-Type': 'application/json'})
-    .send(req.body.flatMap(str => {
-      const comp = str.split(' ');
+  const prettifiedLogContents = req.body.flatMap(str => {
+    const comp = str.split(' ');
 
-      const headerPri = comp.shift();
+    const headerPri = comp.shift();
 
-      const priority = Number(headerPri.slice(headerPri.indexOf('<') + 1, headerPri.lastIndexOf('>')));
-      const version = Number(headerPri.slice(headerPri.lastIndexOf('>') + 1));
+    const priority = Number(headerPri.slice(headerPri.indexOf('<') + 1, headerPri.lastIndexOf('>')));
+    const version = Number(headerPri.slice(headerPri.lastIndexOf('>') + 1));
 
-      if (version !== 1) {
-        console.warn('! unsupported RFC 5424 version !');
-      }
+    if (version !== 1) {
+      console.warn('! unsupported RFC 5424 version !');
+    }
 
-      const ret = {
-        priority,
-        timestamp: new Date(comp.shift()).toISOString(), // ISO is the only format that loggly will parse
-        host: comp.shift(),
-        appName: comp.shift(), // or heroku.source
-        dyno: comp.shift(), // or procId
-      };
+    const ret = {
+      priority,
+      timestamp: new Date(comp.shift()).toISOString(), // ISO is the only format that loggly will parse
+      host: comp.shift(),
+      appName: comp.shift(), // or heroku.source
+      dyno: comp.shift(), // or procId
+    };
 
-      ret.facilityCode = priority >> 3;
-      ret.facility = FACILITY[ret.facilityCode] || '?';
-      ret.severityCode = priority & 7;
-      ret.severity = SEVERITY[ret.severityCode] || '?';
+    ret.facilityCode = priority >> 3;
+    ret.facility = FACILITY[ret.facilityCode] || '?';
+    ret.severityCode = priority & 7;
+    ret.severity = SEVERITY[ret.severityCode] || '?';
 
-      if (comp[0] === '-') comp.shift(); // discard dash
+    if (comp[0] === '-') comp.shift(); // discard dash
 
-      if (comp[0] && comp[0].endsWith(':')) { // RayTech.RayBot.AppHarbor.exe:
-        ret.process = comp.shift().slice(0, -1);
-      }
+    if (comp[0] && comp[0].endsWith(':')) { // RayTech.RayBot.AppHarbor.exe:
+      ret.process = comp.shift().slice(0, -1);
+    }
 
-      let message = comp.join(' ');
+    let message = comp.join(' ');
 
-      if (keepProcessInMessage && ret.process) {
-        message = `[${ret.process}] ${message}`;
-      }
+    if (keepProcessInMessage && ret.process) {
+      message = `[${ret.process}] ${message}`;
+    }
 
-      if (message.includes('\n')) {
-        // append part number and json data after each line
-        return message.split('\n').map((line, part) => {
-          if (line.endsWith('\r')) {
-            line = line.slice(0, -1); // strip carriage return for consistency
-          }
+    if (message.includes('\n')) {
+      // append part number and json data after each line
+      return message.split('\n').map((line, part) => {
+        if (line.endsWith('\r')) {
+          line = line.slice(0, -1); // strip carriage return for consistency
+        }
 
-          const retClone = Object.assign({ part }, ret);
-          return `${line} ${JSON.stringify(retClone)}`;
-        });
-      }
+        const retClone = Object.assign({ part }, ret);
+        return `${line} ${JSON.stringify(retClone)}`;
+      });
+    }
 
-      // else just return a single message and json data
-      return [`${message} ${JSON.stringify(ret)}`];
-    }).join('\n'))
+    // else just return a single message and json data
+    return [`${message} ${JSON.stringify(ret)}`];
+  }).join('\n');
+
+  promises[promises.length] = promisePost(ctx.secrets.sematext_url)
+    .headers({'Content-Type': 'application/json'})
+    .send(JSON.stringify({ "message": prettifiedLogContents }))
     .end()
     .then(e => e.raw_body);
-    
-  ///*
-  promises[promises.length] = gistsGetRequest('/rate_limit').then(e => {
-    const ratelimits = e.body;
-    console.log('Rate limits: ' + util.inspect(ratelimits));
-    return ratelimits;
-  });
-  //*/
-  
+
+  // push to loggly
+  promises[promises.length] = promisePost(ctx.secrets.logurl)
+    .headers({/*'Accept': 'application/json', */'Content-Type': 'application/json'})
+    .send(prettifiedLogContents)
+    .end()
+    .then(e => e.raw_body);
+
+  // aggregate logs in data, push when >200k
   promises[promises.length] = (async () => {
     const data = await repeatGetData(ctx);
-    
+
     if (!data) data = { d: '' };
-    if (!data.d) data.d = '';
+    else if (!data.d) data.d = '';
+
     data.d += '\n' + (req.body ? req.body.join('\n') : `<saved message with no content at ${new Date()}>`);
-    
+
     if (data.d.length > 200000) { // 200k
-      makeOrUpdateGist(data.d) // asynchronously dispatch gist write
+      updateBatched(data.d) // asynchronously dispatch gist write
         .then(() => console.log('GIST updated'))
         .catch(err => console.error('GIST failed: ' + err));
       data.d = '';
     }
-    
+
     await repeatSetData(ctx, data);
   })();
 
@@ -350,17 +259,16 @@ function handler(req, res) {
     });
 }
 
+// push aggregate
+async function updateBatched(str) {
+  // ...
+}
+
 app.post('/', logplexMiddleware, handler);
 if (Webtask.__ctx) app.get('/', logplexMiddleware, handler);
 
 app.get('/flush', (req, res) => {
   const ctx = Webtask.__ctx || req.webtaskContext;
-  
-  if (!gists) {
-    gists = new Gists({
-      token: ctx.secrets.gh_token
-    });
-  }
 
   //const password = req.originalUrl.slice(req.originalUrl.indexOf('?') + 1);
   (async () => {
@@ -371,7 +279,7 @@ app.get('/flush', (req, res) => {
     const oldValue = data.d;
     data.d = '';
 
-    await Promise.all([repeatSetData(ctx, data), makeOrUpdateGist(oldValue)]);
+    await Promise.all([repeatSetData(ctx, data), updateBatched(oldValue)]);
     return true;
   })()
     .then(result => {
