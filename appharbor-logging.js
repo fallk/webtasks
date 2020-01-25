@@ -173,53 +173,67 @@ function handler(req, res) {
       console.warn('! unsupported RFC 5424 version !');
     }
 
-    const ret = {
+    const msgData = {
       priority,
       timestamp: new Date(comp.shift()).toISOString(), // ISO is the only format that loggly will parse
       host: comp.shift(),
       appName: comp.shift(), // or heroku.source
       dyno: comp.shift(), // or procId
+      part: -1,
+      facilityCode: priority >> 3,
+      severityCode: priority & 7,
     };
 
-    ret.facilityCode = priority >> 3;
-    ret.facility = FACILITY[ret.facilityCode] || '?';
-    ret.severityCode = priority & 7;
-    ret.severity = SEVERITY[ret.severityCode] || '?';
+    msgData.facility = FACILITY[msgData.facilityCode] || '?';
+    msgData.severity = SEVERITY[msgData.severityCode] || '?';
 
-    if (comp[0] === '-') comp.shift(); // discard dash
+    if (comp[0] === '-') { // discard dash
+      comp.shift();
+    }
 
     if (comp[0] && comp[0].endsWith(':')) { // RayTech.RayBot.AppHarbor.exe:
-      ret.process = comp.shift().slice(0, -1);
+      msgData.process = comp.shift().slice(0, -1);
     }
 
-    let message = comp.join(' ');
+    const msgDataJson = JSON.stringify(msgData); // msgData as json without message or messageFormatted
+    const processPrefix = keepProcessInMessage && msgData.process ? `[${msgData.process}] ` : ``; // include process when keepProcessInMessage==true otherwise empty
 
-    if (keepProcessInMessage && ret.process) {
-      message = `[${ret.process}] ${message}`;
-    }
+    msgData.message = comp.join(' ');
+    msgData.messageFormatted = `${processPrefix}${msgData.message} ${msgDataJson}`;
 
-    if (message.includes('\n')) {
+    if (msgData.message.includes('\n')) {
       // append part number and json data after each line
-      return message.split('\n').map((line, part) => {
+      return msgData.message.split('\n').map((line, part) => {
         if (line.endsWith('\r')) {
           line = line.slice(0, -1); // strip carriage return for consistency
         }
 
-        const retClone = Object.assign({ part }, ret);
-        return [retClone, `${line} ${JSON.stringify(retClone)}`];
+        return Object.assign({}, msgData, { part, message: line, messageFormatted: `${processPrefix}${line} ${msgDataJson}` });
       });
     }
 
     // else just return a single message and json data
-    return [[ret, `${message} ${JSON.stringify(ret)}`]];
+    return [msgData];
   });
 
-  promises[promises.length] = promisePost('https://logsene-receiver.sematext.com/_bulk')
+  // push to sematext logsense
+  promises[promises.length] = promisePost('https://logsene-receiver.sematext.com/_bulk') // TODO can logsene take more fields?
     .headers({'Content-Type': 'application/json'})
     .send(
-      prettifiedLog.map(([data, message]) => 
-        JSON.stringify({ index: { _index: ctx.secrets.logsene_token, _type: data.facility } }) + '\n' +
-        JSON.stringify({ '@timestamp': data.timestamp, message, severity_numeric: data.severityCode })
+      prettifiedLog.map(({facility, timestamp, messageFormatted, severityCode}) => 
+        JSON.stringify({ index: { _index: ctx.secrets.logsene_token, _type: facility } }) + '\n' +
+        JSON.stringify({ '@timestamp': timestamp, message: messageFormatted, severity_numeric: severityCode })
+      ).join('\n')
+    )
+    .end()
+    .then(e => e.raw_body);
+
+  // push to logz.io
+  promises[promises.length] = promisePost(ctx.secrets.logzio_url)
+    .headers({'Content-Type': 'application/json'})
+    .send(
+      prettifiedLog.map(data =>
+        JSON.stringify(Object.assign({ '@timestamp': data.timestamp }, data))
       ).join('\n')
     )
     .end()
@@ -229,7 +243,7 @@ function handler(req, res) {
   promises[promises.length] = promisePost(ctx.secrets.logurl)
     .headers({/*'Accept': 'application/json', */'Content-Type': 'application/json'})
     .send(
-      prettifiedLog.map(([data, message]) => message).join('\n')
+      prettifiedLog.map(({messageFormatted}) => messageFormatted).join('\n')
     )
     .end()
     .then(e => e.raw_body);
