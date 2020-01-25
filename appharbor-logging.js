@@ -1,3 +1,4 @@
+// @ts-check
 const unirest = require('unirest');
 const express = require('express');
 const Webtask = require('webtask-tools');
@@ -161,6 +162,25 @@ function handler(req, res) {
 
   const promises = [];
 
+  /**
+   * @typedef {{
+        priority: number,
+        timestamp: string,
+        host?: string,
+        appName?: string,
+        dyno?: string,
+        part: number,
+        facilityCode: number,
+        severityCode: number,
+        facility: string,
+        severity: string,
+        process?: string,
+        message: string,
+        messageFormatted: string,
+      }} MsgData
+   */
+
+  /** @type {MsgData[]} */
   const prettifiedLog = req.body.flatMap(str => {
     const comp = str.split(' ');
 
@@ -173,6 +193,7 @@ function handler(req, res) {
       console.warn('! unsupported RFC 5424 version !');
     }
 
+    /** @type {MsgData} */
     const msgData = {
       priority,
       timestamp: new Date(comp.shift()).toISOString(), // ISO is the only format that loggly will parse
