@@ -247,7 +247,7 @@ function handler(req, res) {
       ).join('\n')
     )
     .end()
-    .then(e => e.raw_body);
+    .then(e => `logsene: ${e.code} ${e.raw_body}`);
 
   // push to logz.io
   promises[promises.length] = promisePost(ctx.secrets.logzio_url)
@@ -258,7 +258,7 @@ function handler(req, res) {
       ).join('\n')
     )
     .end()
-    .then(e => e.raw_body);
+    .then(e =>`logz.io: ${e.code} ${e.raw_body}`);
 
   // push to loggly
   promises[promises.length] = promisePost(ctx.secrets.logurl)
@@ -267,7 +267,7 @@ function handler(req, res) {
       prettifiedLog.map(({messageFormatted}) => messageFormatted).join('\n')
     )
     .end()
-    .then(e => e.raw_body);
+    .then(e => `loggly: ${e.code} ${e.raw_body}`);
 
   // aggregate logs in data, push when >200k
   promises[promises.length] = (async () => {
@@ -286,7 +286,8 @@ function handler(req, res) {
     }
 
     await repeatSetData(ctx, data);
-  })();
+  })()
+    .then(e => `aggregate: done!`);
 
   //res.status(200).end('Hi: ' + util.inspect(req.body));
 
