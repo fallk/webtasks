@@ -292,7 +292,9 @@ function handler(req, res) {
 
   Promise.all(promises)
     .then(results => {
-      console.log('REQ finished ' + util.inspect(results));
+      for (const result of results) {
+        console.blue('REQ finished ' + result);
+      }
       res.status(200).end('Hi: ' + util.inspect(req.body));
     })
     .catch(err => {
